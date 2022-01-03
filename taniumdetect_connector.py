@@ -1054,7 +1054,7 @@ class TaniumDetectConnector(BaseConnector):
             self.debug_print('Handled exception in _create_dict_hash', e)
             return None
 
-        return hashlib.md5(input_dict_str).hexdigest()
+        return hashlib.sha256(input_dict_str).hexdigest()
 
     def _process_parameters(self, endpoint, params):
         """ This function is used process the parameters and creates a valid endpoint URL.
