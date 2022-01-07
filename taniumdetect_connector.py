@@ -1,6 +1,6 @@
 # File: taniumdetect_connector.py
 #
-# Copyright (c) 2020 Splunk Inc.
+# Copyright (c) 2020-2022 Splunk Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,20 +19,20 @@
 # Added action on_poll to ingest alerts.
 # Added comments for all actions and made the code easier to follow by adding new lines.
 # Added default fields in the tanium_detect_consts.py
-import requests
-import json
-from bs4 import BeautifulSoup
 import hashlib
-import pytz
-from datetime import datetime
+import json
 import time
-from taniumdetect_consts import *
-from bs4 import UnicodeDammit
+from datetime import datetime
 
 # Phantom App imports
 import phantom.app as phantom
-from phantom.base_connector import BaseConnector
+import pytz
+import requests
+from bs4 import BeautifulSoup, UnicodeDammit
 from phantom.action_result import ActionResult
+from phantom.base_connector import BaseConnector
+
+from taniumdetect_consts import *
 
 
 class RetVal(tuple):
@@ -47,8 +47,11 @@ class TaniumDetectConnector(BaseConnector):
         super(TaniumDetectConnector, self).__init__()
         self._state = None
         self._base_url = None
+        self._username = None
+        self._password = None
+        self._api_token = None
+        self._verify_server_cert = None
         self.headers = []
-        return
 
     def _process_empty_response(self, response, action_result):
         if response.status_code == 200:
@@ -64,7 +67,7 @@ class TaniumDetectConnector(BaseConnector):
             split_lines = error_text.split('\n')
             split_lines = [ x.strip() for x in split_lines if x.strip() ]
             error_text = ('\n').join(split_lines)
-        except:
+        except Exception:
             error_text = 'Cannot parse error details'
 
         message = ('Status Code: {0}. Data from server:\n{1}\n').format(status_code, error_text)
@@ -81,7 +84,8 @@ class TaniumDetectConnector(BaseConnector):
             if 200 <= r.status_code < 399:
                 return RetVal(phantom.APP_SUCCESS, resp_json)
 
-        message = ('Error from server. Status Code: {0} Data from server: {1}').format(r.status_code, r.text.replace(u'{', '{{').replace(u'}', '}}'))
+        message = ('Error from server. Status Code: {0} Data from server: {1}').format(
+            r.status_code, r.text.replace(u'{', '{{').replace(u'}', '}}'))
 
         return RetVal(action_result.set_status(phantom.APP_ERROR, message), None)
 
@@ -97,15 +101,12 @@ class TaniumDetectConnector(BaseConnector):
         if not r.text:
             return self._process_empty_response(r, action_result)
 
-        message = ("Can't process response from server. Status Code: {0} Data from server: {1}").format(r.status_code, r.text.replace('{', '{{').replace('}', '}}'))
+        message = ("Can't process response from server. Status Code: {0} Data from server: {1}").format(
+            r.status_code, r.text.replace('{', '{{').replace('}', '}}'))
 
         return RetVal(action_result.set_status(phantom.APP_ERROR, message), None)
 
     def _make_rest_call(self, endpoint, action_result, method='get', **kwargs):
-        config = self.get_config()
-
-        username = config.get('Username', '')
-        password = config.get('Password', '')
 
         resp_json = None
 
@@ -113,32 +114,39 @@ class TaniumDetectConnector(BaseConnector):
            'Content-type': 'application/json',
            'Accept': 'application/json'}
 
-        login_url = "{0}{1}".format(UnicodeDammit(self._base_url).unicode_markup.encode('utf-8'), TANIUM_DETECT_API_PATH_AUTH)
+        if not self._api_token:
+            login_url = "{0}{1}".format(UnicodeDammit(self._base_url).unicode_markup.encode('utf-8'), TANIUM_DETECT_API_PATH_AUTH)
+
+            try:
+                req = requests.post(login_url, auth=(self._username, self._password), verify=False, headers=header)
+                if req.status_code >= 200 and req.status_code <= 204:
+                    header['session'] = req.text
+            except Exception as e:
+                if e.message:
+                    try:
+                        error_msg = UnicodeDammit(e.message).unicode_markup.encode('utf-8')
+                    except Exception:
+                        error_msg = "Unknown error occurred. Please check the asset configuration and|or the action parameters."
+                else:
+                    error_msg = "Unknown error occurred. Please check the asset configuration and|or the action parameters."
+                return RetVal(action_result.set_status(phantom.APP_ERROR, ('Error Logging Into Server. Details: {0}').format(
+                    str(error_msg))), resp_json)
+        else:
+            header['session'] = self._api_token
 
         try:
-            req = requests.post(login_url, auth=(username, password), verify=False, headers=header)
-            if req.status_code >= 200 and req.status_code <= 204:
-                header['session'] = req.text
-        except Exception as e:
-            if e.message:
-                try:
-                    error_msg = UnicodeDammit(e.message).unicode_markup.encode('utf-8')
-                except:
-                    error_msg = "Unknown error occurred. Please check the asset configuration and|or the action parameters."
-            else:
-                error_msg = "Unknown error occurred. Please check the asset configuration and|or the action parameters."
-            return RetVal(action_result.set_status(phantom.APP_ERROR, ('Error Logging Into Server. Details: {0}').format(str(error_msg))), resp_json)
-        else:
-            try:
-                request_func = getattr(requests, method)
-            except AttributeError:
-                return RetVal(action_result.set_status(phantom.APP_ERROR, ('Invalid method: {0}').format(method)), resp_json)
+            request_func = getattr(requests, method)
+        except AttributeError:
+            return RetVal(action_result.set_status(phantom.APP_ERROR, ('Invalid method: {0}').format(method)), resp_json)
 
-            url = self._base_url + TANIUM_DETECT_API_BASE_URL + endpoint
-            try:
-                r = request_func(url, auth=(username, password), verify=config.get('verify_server_cert', False), headers=header, **kwargs)
-            except Exception as e:
-                return RetVal(action_result.set_status(phantom.APP_ERROR, ('Error Connecting to server. Details: {0}').format(str(e))), resp_json)
+        url = self._base_url + TANIUM_DETECT_API_BASE_URL + endpoint
+        try:
+            if not self._api_token:
+                r = request_func(url, auth=(self._username, self._password), verify=self._verify_server_cert, headers=header, **kwargs)
+            else:
+                r = request_func(url, verify=self._verify_server_cert, headers=header, **kwargs)
+        except Exception as e:
+            return RetVal(action_result.set_status(phantom.APP_ERROR, ('Error Connecting to server. Details: {0}').format(str(e))), resp_json)
 
         if r.headers:
             self.headers = r.headers
@@ -367,7 +375,7 @@ class TaniumDetectConnector(BaseConnector):
 
         if phantom.is_fail(ret_val):
             self.save_progress(action_result.get_message())
-            self.set_status(phantom.APP_ERROR, ('Failed to list source types').format(action_result.get_message()))
+            self.set_status(phantom.APP_ERROR, ('Failed to list source types: {}').format(action_result.get_message()))
             return action_result.get_status()
 
         action_result.add_data(response)
@@ -897,7 +905,7 @@ class TaniumDetectConnector(BaseConnector):
         # If timezone is not set then cancel. We need the timezone to set the correct query times for ingestion.
         try:
             tz = config.get('timezone')
-        except:
+        except Exception:
             return action_result.set_status(phantom.APP_ERROR, "Asset configuration timezone is not set.")
 
         # Always sort by id
@@ -1126,6 +1134,16 @@ class TaniumDetectConnector(BaseConnector):
         self._state = self.load_state()
         config = self.get_config()
         self._base_url = config.get('base_url')
+        self._verify_server_cert = config.get('verify_server_cert', False)
+
+        self._api_token = config.get('api_token')
+        if not self._api_token:
+            self._username = config.get('username')
+            self._password = config.get('password')
+
+            if not (self._username and self._password):
+                return self.set_status(phantom.APP_ERROR, "Please provide either an API token, or username and password credentials")
+
         return phantom.APP_SUCCESS
 
     def finalize(self):
@@ -1134,7 +1152,12 @@ class TaniumDetectConnector(BaseConnector):
 
 
 if __name__ == '__main__':
+
     import argparse
+
+    import pudb
+
+    pudb.set_trace()
 
     argparser = argparse.ArgumentParser()
 
@@ -1157,7 +1180,7 @@ if __name__ == '__main__':
     if username and password:
         login_url = BaseConnector._get_phantom_base_url() + "login"
         try:
-            print ("Accessing the Login page")
+            print("Accessing the Login page")
             response = requests.get(login_url, verify=False)
             csrftoken = response.cookies['csrftoken']
 
@@ -1170,11 +1193,11 @@ if __name__ == '__main__':
             headers['Cookie'] = 'csrftoken={}'.format(csrftoken)
             headers['Referer'] = login_url
 
-            print ("Logging into Platform to get the session id")
+            print("Logging into Platform to get the session id")
             response2 = requests.post(login_url, verify=False, data=data, headers=headers)
             session_id = response2.cookies['sessionid']
         except Exception as e:
-            print ("Unable to get session id from the platform. Error: {}".format(str(e)))
+            print("Unable to get session id from the platform. Error: {}".format(str(e)))
             exit(1)
 
     with open(args.input_test_json) as f:
@@ -1190,6 +1213,6 @@ if __name__ == '__main__':
             connector._set_csrf_info(csrftoken, headers['Referer'])
 
         ret_val = connector._handle_action(json.dumps(in_json), None)
-        print (json.dumps(json.loads(ret_val), indent=4))
+        print(json.dumps(json.loads(ret_val), indent=4))
 
     exit(0)

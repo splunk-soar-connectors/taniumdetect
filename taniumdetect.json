@@ -9,9 +9,9 @@
     "product_name": "Detect",
     "product_version_regex": ".*",
     "publisher": "Robert Drouin",
-    "license": "Copyright (c) Splunk, 2020",
-    "app_version": "1.5.3",
-    "utctime_updated": "2021-12-15T18:22:55.000000Z",
+    "license": "Copyright (c) Splunk, 2020-2022",
+    "app_version": "1.6.0",
+    "utctime_updated": "2021-11-10T18:50:54.000000Z",
     "package_name": "phantom_taniumdetect",
     "main_module": "taniumdetect_connector.py",
     "min_phantom_version": "4.6.19142",
@@ -23,23 +23,26 @@
             "required": true,
             "order": 0
         },
-        "Verify Server Certificate": {
+        "verify_server_cert": {
             "description": "Verify Server Certificate",
             "data_type": "boolean",
             "default": false,
             "order": 1
         },
-        "Username": {
-            "description": "Username",
-            "data_type": "string",
-            "required": true,
+        "api_token": {
+            "description": "API Token",
+            "data_type": "password",
             "order": 2
         },
-        "Password": {
+        "username": {
+            "description": "Username",
+            "data_type": "string",
+            "order": 3
+        },
+        "password": {
             "description": "Password",
             "data_type": "password",
-            "required": true,
-            "order": 3
+            "order": 4
         },
         "timezone": {
             "required": true,
